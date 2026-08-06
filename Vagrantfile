@@ -4,7 +4,7 @@
 Vagrant.configure("2") do |config|
   # Define a Vagrant machine which should PXE boot off the docker cotnainer
   config.vm.define :demo, primary: true do |demo|
-    demo.vm.box = "bento/ubuntu-20.04"
+    demo.vm.box = "bento/ubuntu-24.04"
 
     # Bridge the VM onto your host's network
     demo.vm.network "public_network"
@@ -30,18 +30,32 @@ Vagrant.configure("2") do |config|
   # For platforms where the Docker container won't work, this boots a VM that
   # runs the container instead
   config.vm.define :netboot, autostart: false do |netboot|
-    netboot.vm.box = "bento/ubuntu-20.04"
+    netboot.vm.box = "bento/ubuntu-24.04"
 
     # Bridge the VM onto your host's network
-    netboot.vm.network "public_network"
+    netboot.vm.network "public_network", bridge: "en0"
 
     # Read a DHCP range from the environment, if one was set
     dhcp_range_start = ENV.has_key?("DHCP_RANGE_START") ? ENV["DHCP_RANGE_START"] : "192.168.0.1"
 
+    # Copy our dnsmasq run script onto the guest so it can be bind-mounted
+    # into the container below, overriding whatever ships in the published
+    # image without needing to rebuild/republish it.
+    netboot.vm.provision "file",
+      source: "etc/services.d/dnsmasq/run",
+      destination: "/tmp/dnsmasq-run"
+
+    netboot.vm.provision "shell", inline: <<-SHELL
+      mkdir -p /opt/dhcp-netboot
+      mv /tmp/dnsmasq-run /opt/dhcp-netboot/dnsmasq-run
+      chmod +x /opt/dhcp-netboot/dnsmasq-run
+    SHELL
+
     # Bring up a Docker container running the netboot server
     netboot.vm.provision "docker" do |d|
-      d.run "samdbmg/dhcp-netboot.xyz",
-        args: "--net=host --cap-add=NET_ADMIN -e DHCP_RANGE_START=" + dhcp_range_start
+      d.run "ghcr.io/tkanarsky/dhcp-netboot:latest",
+        args: "--net=host --cap-add=NET_ADMIN -e DHCP_RANGE_START=" + dhcp_range_start +
+          " -v /opt/dhcp-netboot/dnsmasq-run:/etc/services.d/dnsmasq/run:ro"
     end
   end
 
